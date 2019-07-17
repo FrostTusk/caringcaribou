@@ -9,6 +9,9 @@ from lib.common import hex_str_to_nibble_list, int_from_byte_list, list_to_hex_s
 from lib.constants import ARBITRATION_ID_MAX, ARBITRATION_ID_MIN, BYTE_MAX, BYTE_MIN
 from time import sleep
 
+import datetime
+epoch = datetime.datetime.now()
+
 # Python 2/3 compatibility
 if version_info[0] == 2:
     range = xrange
@@ -221,6 +224,30 @@ def pad_to_even_length(original_list, padding=0x0):
     return original_list
 
 
+def write_to_ids_log(fd, msg):
+    time = datetime.datetime.now()
+    delta = time - epoch
+    seconds = str(delta.seconds)
+    milliseconds = str(divmod(delta.microseconds, 1000)[0])
+
+    while len(milliseconds) < 3:
+        milliseconds = "0" + milliseconds
+    deltaString = seconds + "." + milliseconds
+
+    if len(seconds) == 1:
+        deltaString = "0" + deltaString
+
+    result = deltaString + ":\t" + list_to_hex_str([msg.arbitration_id]) + "\t" + str(msg.dlc) + "\t"
+    result += list_to_hex_str(msg.data, "\t") + "\n"
+    fd.write(result)
+
+
+def initialize_trackers():
+    tracker = []
+    for i in range(0, 2047):
+      tracker.append([0])
+    return tracker 
+
 def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBITRATION_ID_MIN,
                 max_id=ARBITRATION_ID_MAX, min_data_length=MIN_DATA_LENGTH, max_data_length=MAX_DATA_LENGTH,
                 start_index=0, show_status=True, seed=None):
@@ -258,7 +285,13 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
     # Define a callback function which will handle incoming messages
     def response_handler(msg):
         if msg.arbitration_id != arb_id or list(msg.data) != data:
+	    print()
+            trackers[msg.arbitration_id][0] += 1
             directive = directive_str(arb_id, data)
+	    write_to_ids_log(testFile, msg)
+            for i in range(0, len(trackers)):
+               if trackers[i][0] > 0 and trackers[i][0] < 20:
+		 print (hex(i), trackers[i])
             print("\rDirective: {0} (index {1})".format(directive, current_index))
             print("  Received message: {0}".format(msg))
 
@@ -266,7 +299,9 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
     data = None
     file_logging_enabled = filename is not None
     output_file = None
+    trackers = initialize_trackers()
     try:
+        testFile = open("test-file", "w+")
         if file_logging_enabled:
             output_file = open(filename, "a")
         with CanActions() as can_wrap:
@@ -313,6 +348,7 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
     except IOError as e:
         print("ERROR: {0}".format(e))
     finally:
+        testFile.close()
         if output_file is not None:
             output_file.close()
 
