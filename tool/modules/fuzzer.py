@@ -31,6 +31,7 @@ TRACKERS_SIZE = 0x7FF
 LOG_SIZE = 50
 POPULATE_THRESHOLD = 800
 TRIGGER_THRESHOLD = 10
+CORRELATE_THRESHOLD = 0.7
 
 def directive_str(arb_id, data):
     """
@@ -249,7 +250,7 @@ def write_to_ids_log(fd, msg):
 def initialize_trackers():
     trackers = []
     for i in range(0, TRACKERS_SIZE):
-      trackers.append([0, set([])])
+      trackers.append([0, {}])
     return trackers
 
 
@@ -260,10 +261,16 @@ def handle_trackers(trackers, log, count, recv_arb_id, recv_data):
     if count >= POPULATE_THRESHOLD and trackers[recv_arb_id][0] < TRIGGER_THRESHOLD:
         print("valid for ", hex(recv_arb_id), " with ", trackers[recv_arb_id][0])
         for i in range(0, len(log)):
-            if log[i][0] in trackers[recv_arb_id][1]:
-                print("WOW, log and trackers got this in common ", hex(log[i][0]), "for ", hex(recv_arb_id))
-            else:
-                trackers[recv_arb_id][1].add(log[i][0])
+            if log[i][0] not in trackers[recv_arb_id][1]:
+                trackers[recv_arb_id][1][log[i][0]] = 0
+            trackers[recv_arb_id][1][log[i][0]] += 1
+        print("aggragating keys")
+        for send_key in trackers[recv_arb_id][1]:
+            if (trackers[recv_arb_id][1][send_key] / trackers[recv_arb_id][0]) > CORRELATE_THRESHOLD \
+               and trackers[recv_arb_id][0] > 1:
+                print(hex(send_key), "count: ", trackers[recv_arb_id][1][send_key])
+
+
     #print("done handling trackers")
 
 #def cool_off_hot_test():
