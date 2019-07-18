@@ -27,6 +27,10 @@ DEFAULT_SEED_MAX = 2 ** 16
 # Number of sub-lists to split message list into per round in 'replay' mode
 REPLAY_NUMBER_OF_SUB_LISTS = 5
 
+TRACKER_SIZE = 0x7FF
+LOG_SIZE = 20
+POPULATE_THRESHOLD = 100
+TRIGGER_THRESHOLD = 10
 
 def directive_str(arb_id, data):
     """
@@ -244,9 +248,27 @@ def write_to_ids_log(fd, msg):
 
 def initialize_trackers():
     tracker = []
-    for i in range(0, 2047):
-      tracker.append([0])
-    return tracker 
+    for i in range(0, TRACKER_SIZE):
+      tracker.append([0, {}])
+    return tracker
+
+
+def handleTrackers(trackers, log, count, id):
+    trackers[id][0] += 1
+    if count >= 100 and trackers[id][0] < TRIGGER_THRESHOLD:
+        # if has_common(log, trackers[id][1])
+            cool_off_hot_test()
+        else
+            # Add log ids to trackers
+
+
+#def cool_off_hot_test():
+#    sleep()
+#    handler():
+#        if response is similar to target
+#           print(whatever you sent)
+#    send msg
+
 
 def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBITRATION_ID_MIN,
                 max_id=ARBITRATION_ID_MAX, min_data_length=MIN_DATA_LENGTH, max_data_length=MAX_DATA_LENGTH,
