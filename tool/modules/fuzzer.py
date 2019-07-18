@@ -27,9 +27,9 @@ DEFAULT_SEED_MAX = 2 ** 16
 # Number of sub-lists to split message list into per round in 'replay' mode
 REPLAY_NUMBER_OF_SUB_LISTS = 5
 
-TRACKER_SIZE = 0x7FF
-LOG_SIZE = 20
-POPULATE_THRESHOLD = 100
+TRACKERS_SIZE = 0x7FF
+LOG_SIZE = 50
+POPULATE_THRESHOLD = 800
 TRIGGER_THRESHOLD = 10
 
 def directive_str(arb_id, data):
@@ -247,20 +247,24 @@ def write_to_ids_log(fd, msg):
 
 
 def initialize_trackers():
-    tracker = []
-    for i in range(0, TRACKER_SIZE):
-      tracker.append([0, {}])
-    return tracker
+    trackers = []
+    for i in range(0, TRACKERS_SIZE):
+      trackers.append([0, set([])])
+    return trackers
 
 
-def handleTrackers(trackers, log, count, id):
-    trackers[id][0] += 1
-    if count >= 100 and trackers[id][0] < TRIGGER_THRESHOLD:
-        # if has_common(log, trackers[id][1])
-            cool_off_hot_test()
-        else
-            # Add log ids to trackers
-
+def handle_trackers(trackers, log, count, recv_arb_id, recv_data):
+    #print()    
+    #print("handling trackers")
+    trackers[recv_arb_id][0] += 1
+    if count >= POPULATE_THRESHOLD and trackers[recv_arb_id][0] < TRIGGER_THRESHOLD:
+        print("valid for ", hex(recv_arb_id), " with ", trackers[recv_arb_id][0])
+        for i in range(0, len(log)):
+            if log[i][0] in trackers[recv_arb_id][1]:
+                print("WOW, log and trackers got this in common ", hex(log[i][0]), "for ", hex(recv_arb_id))
+            else:
+                trackers[recv_arb_id][1].add(log[i][0])
+    #print("done handling trackers")
 
 #def cool_off_hot_test():
 #    sleep()
@@ -307,21 +311,22 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
     # Define a callback function which will handle incoming messages
     def response_handler(msg):
         if msg.arbitration_id != arb_id or list(msg.data) != data:
-	    print()
-            trackers[msg.arbitration_id][0] += 1
+            handle_trackers(trackers, log, current_index, msg.arbitration_id, msg.data)
             directive = directive_str(arb_id, data)
-	    write_to_ids_log(testFile, msg)
-            for i in range(0, len(trackers)):
-               if trackers[i][0] > 0 and trackers[i][0] < 20:
-		 print (hex(i), trackers[i])
-            print("\rDirective: {0} (index {1})".format(directive, current_index))
-            print("  Received message: {0}".format(msg))
+            write_to_ids_log(testFile, msg)
+            #for i in range(0, len(trackers)):
+            #   if trackers[i][0] > 0 and trackers[i][0] < 20:
+		    #        print (hex(i), trackers[i][0])
+            #print("\rDirective: {0} (index {1})".format(directive, current_index))
+            #print("  Received message: {0}".format(msg))
 
     arb_id = None
     data = None
     file_logging_enabled = filename is not None
     output_file = None
+
     trackers = initialize_trackers()
+    log = []
     try:
         testFile = open("test-file", "w+")
         if file_logging_enabled:
@@ -355,13 +360,18 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
                     continue
 
                 if show_status:
-                    print("\rMessages sent: {0}, index: {1}".format(messages_sent, current_index), end="")
+                    #print("\rMessages sent: {0}, index: {1}".format(messages_sent, current_index), end="")
                     stdout.flush()
 
                 # Send message
                 can_wrap.send(data=data, arb_id=arb_id)
                 messages_sent += 1
 
+		        # Add to memory log
+                while len(log) >= LOG_SIZE:
+                    log.pop(0)
+                log.append([arb_id, data])
+		        
                 # Log to file
                 if file_logging_enabled:
                     write_directive_to_file_handle(output_file, arb_id, data)
