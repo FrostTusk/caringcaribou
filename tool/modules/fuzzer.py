@@ -29,7 +29,7 @@ REPLAY_NUMBER_OF_SUB_LISTS = 5
 
 TRACKERS_SIZE = 0x7FF
 LOG_SIZE = 50
-POPULATE_THRESHOLD = 800
+POPULATE_THRESHOLD = 500
 TRIGGER_THRESHOLD = 10
 CORRELATE_THRESHOLD = 0.7
 
@@ -247,38 +247,51 @@ def write_to_ids_log(fd, msg):
     fd.write(result)
 
 
+class ResponseTracker:
+    def __init__(self, arb_id):
+	    self.arb_id = arb_id
+
+    arb_id = hex
+    count = 0
+    potential_cause_ids = {} # {id1: [msg1, msg2, msg3, ...], ...}
+	
+
 def initialize_trackers():
     trackers = []
-    for i in range(0, TRACKERS_SIZE):
-      trackers.append([0, {}])
+    for arb_id in range(0, TRACKERS_SIZE):
+		trackers.append(ResponseTracker(arb_id))
     return trackers
 
 
-def handle_trackers(trackers, log, count, recv_arb_id, recv_data):
-    #print()    
-    #print("handling trackers")
-    trackers[recv_arb_id][0] += 1
-    if count >= POPULATE_THRESHOLD and trackers[recv_arb_id][0] < TRIGGER_THRESHOLD:
-        print("valid for ", hex(recv_arb_id), " with ", trackers[recv_arb_id][0])
+def handle_trackers(trackers, log, count, recv_arb_id, recv_data, can_wrap):
+    trackers[recv_arb_id].count += 1
+    if count >= POPULATE_THRESHOLD and trackers[recv_arb_id].count < TRIGGER_THRESHOLD:
         for i in range(0, len(log)):
-            if log[i][0] not in trackers[recv_arb_id][1]:
-                trackers[recv_arb_id][1][log[i][0]] = 0
-            trackers[recv_arb_id][1][log[i][0]] += 1
-        print("aggragating keys")
-        for send_key in trackers[recv_arb_id][1]:
-            if (trackers[recv_arb_id][1][send_key] / trackers[recv_arb_id][0]) > CORRELATE_THRESHOLD \
-               and trackers[recv_arb_id][0] > 1:
-                print(hex(send_key), "count: ", trackers[recv_arb_id][1][send_key])
+            if log[i][0] not in trackers[recv_arb_id].potential_cause_ids:
+                trackers[recv_arb_id].potential_cause_ids[log[i][0]] = 0
+            
+            trackers[recv_arb_id].potential_cause_ids[log[i][0]] += 1
+            print(trackers[recv_arb_id].potential_cause_ids)
+
+        for send_arb_id in trackers[recv_arb_id].potential_cause_ids:
+            if (trackers[recv_arb_id].potential_cause_ids[send_arb_id] / trackers[recv_arb_id].count) \
+			   > CORRELATE_THRESHOLD and trackers[recv_arb_id].count > 1:
+                #print(trackers[recv_arb_id].arb_id)
+                #print(trackers[recv_arb_id].count)
+                #print(trackers[recv_arb_id].potential_cause_ids[send_arb_id])
+                print("message received from: ", hex(recv_arb_id), " could be due to sending to ", hex(send_arb_id), 
+					  "correlation: ", trackers[recv_arb_id].potential_cause_ids[send_arb_id] / trackers[recv_arb_id].count,
+					  "over: ", trackers[recv_arb_id].count, " received messages count")
+                if (trackers[recv_arb_id].count >= 5):
+	                cool_off_hot_test(send_arb_id, recv_arb_id, trackers[recv_arb_id].potential_cause_ids[send_arb_id], can_wrap)
 
 
-    #print("done handling trackers")
+def cool_off_hot_test(send_arb_id, recv_arb_id, messages, can_wrap):
+    sleep(DELAY_BETWEEN_MESSAGES) # To test sleep for log time and see if messages are still set
+    def response_handler(msg):
+        if msg.arbitration_id == recv_arb_id:
+            print("bidirectional confirmation")
 
-#def cool_off_hot_test():
-#    sleep()
-#    handler():
-#        if response is similar to target
-#           print(whatever you sent)
-#    send msg
 
 
 def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBITRATION_ID_MIN,
@@ -318,7 +331,7 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
     # Define a callback function which will handle incoming messages
     def response_handler(msg):
         if msg.arbitration_id != arb_id or list(msg.data) != data:
-            handle_trackers(trackers, log, current_index, msg.arbitration_id, msg.data)
+            handle_trackers(trackers, log, current_index, msg.arbitration_id, msg.data, can_wrap)
             directive = directive_str(arb_id, data)
             write_to_ids_log(testFile, msg)
             #for i in range(0, len(trackers)):
