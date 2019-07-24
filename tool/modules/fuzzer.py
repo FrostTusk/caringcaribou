@@ -9,9 +9,6 @@ from lib.common import hex_str_to_nibble_list, int_from_byte_list, list_to_hex_s
 from lib.constants import ARBITRATION_ID_MAX, ARBITRATION_ID_MIN, BYTE_MAX, BYTE_MIN
 from time import sleep
 
-import datetime
-epoch = datetime.datetime.now()
-
 # Python 2/3 compatibility
 if version_info[0] == 2:
     range = xrange
@@ -27,16 +24,23 @@ DEFAULT_SEED_MAX = 2 ** 16
 # Number of sub-lists to split message list into per round in 'replay' mode
 REPLAY_NUMBER_OF_SUB_LISTS = 5
 
-TRACKERS_SIZE = 0x7FF
+import datetime
+# Keeps track of the start of execution, used for delta time calculations.
+EPOCH = datetime.datetime.now()
+
+# The size of the log of sent messages.
 LOG_SIZE = 50
-POPULATE_THRESHOLD = 500
-TRIGGER_THRESHOLD = 10
+# After how many sent messages trackers should be started to be output.
+POPULATE_THRESHOLD = 800
+# After how many potential cause hits should an id be included in trackers output.
+TRIGGER_THRESHOLD = 1
+# Required correlation to be included in trackers output.
 CORRELATE_THRESHOLD = 0.7
+
 
 def directive_str(arb_id, data):
     """
     Converts a directive to its string representation
-
     :param arb_id: message arbitration ID
     :param data: message data bytes
     :return: str representing directive
@@ -49,7 +53,6 @@ def directive_str(arb_id, data):
 def write_directive_to_file_handle(file_handle, arb_id, data):
     """
     Writes a cansend directive to a file
-
     :param file_handle: handle for the output file
     :param arb_id: int arbitration ID
     :param data: list of data bytes
@@ -61,7 +64,6 @@ def write_directive_to_file_handle(file_handle, arb_id, data):
 def set_seed(seed=None):
     """
     Seeds the PRNG with 'seed'. If this is None, a seed is pulled from the PRNG instead.
-
     :param seed: int to use for seeding
     """
     if seed is None:
@@ -73,7 +75,6 @@ def set_seed(seed=None):
 def parse_directive(directive):
     """
     Parses a cansend directive
-
     :param directive: str representing a cansend directive
     :return: tuple (int arbitration_id, [int data_byte])
     """
@@ -88,12 +89,10 @@ def apply_fuzzed_data(initial_data, fuzzed_nibbles, bitmap):
     """
     Applies 'fuzzed_nibbles' on top of 'initial_data', for all indices where 'bitmap' is True.
     Returns result as a list of bytes.
-
     Example:
     apply_fuzzed_data([0x2, 0x4, 0xA, 0xB], [0x5, 0xF], [False, True, True, False])
     gives the following result:
     [0x25, 0xFB]
-
     :param initial_data: list of initial data nibbles
     :param fuzzed_nibbles: list of nibbles to apply
     :param bitmap: list of bool values, indicating where to apply fuzzed nibbles
@@ -123,12 +122,10 @@ def apply_fuzzed_data(initial_data, fuzzed_nibbles, bitmap):
 def nibbles_to_bytes(nibbles):
     """
     Converts a list of nibbles into a list of corresponding bytes.
-
     Example:
     nibbles_to_bytes([0x2, 0x1, 0xF, 0xA, 0x3, 0xC])
     gives
     [0x21, 0xFA, 0x3C]
-
     :param nibbles: list of nibble values
     :return: list of int values (bytes)
     """
@@ -144,7 +141,6 @@ def nibbles_to_bytes(nibbles):
 def split_lists(full_list, pieces):
     """
     Generator function which splits 'full_list' into smaller sub-lists
-
     :param full_list: list to split
     :param pieces: number of sub-lists to produce
     :return: yields one sub-list at a time
@@ -161,7 +157,6 @@ def split_lists(full_list, pieces):
 def get_random_arbitration_id(min_id, max_id):
     """
     Returns a random arbitration ID in the range min_id <= arb_id <= max_id
-
     :param min_id: int minimum allowed arbitration ID (inclusive)
     :param max_id: int maximum allowed arbitration ID (inclusive)
     :return: int arbitration ID
@@ -173,7 +168,6 @@ def get_random_arbitration_id(min_id, max_id):
 def get_random_data(min_length, max_length):
     """
     Generates a list of random data bytes, whose length lies in the interval 'min_length' to 'max_length'
-
     :param min_length: int minimum length
     :param max_length: int maximum length
     :return: list of randomized bytes
@@ -191,7 +185,6 @@ def get_random_data(min_length, max_length):
 def parse_directives_from_file(filename):
     """
     Parses 'filename' and returns a list of all directives contained within
-
     :param filename: str file to parse
     :return: list of str directives
     """
@@ -215,23 +208,31 @@ def parse_directives_from_file(filename):
 def pad_to_even_length(original_list, padding=0x0):
     """
     Prepends 'padding' to 'original_list' if its length is uneven.
-
     Examples:
     pad_to_even_length([1, 2, 3]) gives [0, 1, 2, 3]
     pad_to_even_length([1, 2]) gives [1, 2]
-
     :param original_list: list of elements
     :param padding: element to prepend
     :return: list of even length
     """
     if len(original_list) % 2 == 1:
         original_list.insert(0, padding)
+
     return original_list
 
 
 def write_to_ids_log(fd, msg):
+    """
+    This writes a given response msg to a file
+    in the format specified for the ids found here:
+    https://github.com/brent-stone/CAN_Reverse_Engineering.
+    This method is used for debugging/testing.
+    Can be removed if so desired.
+    :param fd: The file descriptor to which the response needs to be written.
+    :param msg: The received response message. 
+    """
     time = datetime.datetime.now()
-    delta = time - epoch
+    delta = time - EPOCH
     seconds = str(delta.seconds)
     milliseconds = str(divmod(delta.microseconds, 1000)[0])
 
@@ -248,58 +249,136 @@ def write_to_ids_log(fd, msg):
 
 
 class ResponseTracker:
+    """
+    A response tracker object, this object keeps track of 
+    all the responses received from a specific arbitration id.
+    It also keeps track of all the potential causes of this kind of response.
+    """
     def __init__(self, arb_id):
-	    self.arb_id = arb_id
+        """
+        Creates a new response tracker for the given arbitration id.
+        :param arb_id: The arbitration id for which a new response tracker should be constructed.
+        """
+        self._arb_id = arb_id
+        self._count = 0
+        self._potential_cause_ids = {} # {id1: [msg1, msg2, msg3, ...], ...}
+        self._messages = []
 
-    arb_id = hex
-    count = 0
-    potential_cause_ids = {} # {id1: [msg1, msg2, msg3, ...], ...}
-	
+    def get_arb_id(self):
+        """
+        Get the arbitration id that this response tracker is tracking.
+        """
+        return self._arb_id
 
-def initialize_trackers():
-    trackers = []
-    for arb_id in range(0, TRACKERS_SIZE):
-		trackers.append(ResponseTracker(arb_id))
-    return trackers
+    def get_count(self):
+        """
+        Get the amount of received responses.
+        """
+        return self._count
+
+    def get_messages(self):
+        """
+        Get all the messages of this response tracker.
+        """
+        return self._messages
+
+    def get_causes(self):
+        """
+        Get all potential causes of this response tracker.
+        """
+        return self._potential_cause_ids.keys()
+
+    def calc_cause_correlation(self, arb_id):
+        """
+        Calculate the correlation between the response and the given arbitration id.
+        :param arb_id: The arbitration id to be used to calculate correlation.
+        """
+        return len(self._potential_cause_ids[arb_id]) / self._count
+
+    def get_cause_messages(self, arb_id):
+        """
+        Get the potential cause messages of a given arbitration id.
+        :param arb_id: The arbitration id of which the messages need to be returned.
+        """
+        return self._potential_cause_ids[arb_id]
+
+    def received_response(self, data):
+        """
+        Log a new received response.
+        :param msg: The data of the received response.
+        """
+        self._count += 1
+        self._messages.append(data)
+
+    def add_potential_cause(self, arb_id, data):
+        """
+        Add a new potential cause.
+        :param arb_id: The id that might have caused this response.
+        :param data: The data of the packet that might have caused this response.
+        """
+        if arb_id not in self._potential_cause_ids:
+            self._potential_cause_ids[arb_id] = []
+        self._potential_cause_ids[arb_id].append(data)
 
 
-def handle_trackers(trackers, log, count, recv_arb_id, recv_data, can_wrap):
-    trackers[recv_arb_id].count += 1
-    if count >= POPULATE_THRESHOLD and trackers[recv_arb_id].count < TRIGGER_THRESHOLD:
-        for i in range(0, len(log)):
-            if log[i][0] not in trackers[recv_arb_id].potential_cause_ids:
-                trackers[recv_arb_id].potential_cause_ids[log[i][0]] = 0
-            
-            trackers[recv_arb_id].potential_cause_ids[log[i][0]] += 1
-            print(trackers[recv_arb_id].potential_cause_ids)
+def handle_trackers(trackers, log, count, recv_arb_id, recv_data, old_wrap, old_handler):
+    """
+    Handles the response tracker information when a response is received.
+    :param trackers: The original trackers
+    :param log: The current log of all recently sent messages.
+    :param count: The amount of sent messages so far.
+    :param recv_arb_id: The id of the response.
+    :param recv_data: The data that was received in the response.
+    :param old_wrap: The old wrapper that was used to send can messages.
+    :param old_handler: The old handler that was used when a message was received.
+    """
+    if recv_arb_id not in trackers:
+        trackers[recv_arb_id] = ResponseTracker(recv_arb_id)
+    trackers[recv_arb_id].received_response(recv_data)
 
-        for send_arb_id in trackers[recv_arb_id].potential_cause_ids:
-            if (trackers[recv_arb_id].potential_cause_ids[send_arb_id] / trackers[recv_arb_id].count) \
-			   > CORRELATE_THRESHOLD and trackers[recv_arb_id].count > 1:
-                #print(trackers[recv_arb_id].arb_id)
-                #print(trackers[recv_arb_id].count)
-                #print(trackers[recv_arb_id].potential_cause_ids[send_arb_id])
-                print("message received from: ", hex(recv_arb_id), " could be due to sending to ", hex(send_arb_id), 
-					  "correlation: ", trackers[recv_arb_id].potential_cause_ids[send_arb_id] / trackers[recv_arb_id].count,
-					  "over: ", trackers[recv_arb_id].count, " received messages count")
-                if (trackers[recv_arb_id].count >= 5):
-	                cool_off_hot_test(send_arb_id, recv_arb_id, trackers[recv_arb_id].potential_cause_ids[send_arb_id], can_wrap)
+    if count >= POPULATE_THRESHOLD:
+        for i in range(0, LOG_SIZE):
+            trackers[recv_arb_id].add_potential_cause(log[i][0], log[i][1])
+
+        for send_arb_id in trackers[recv_arb_id].get_causes():
+            if trackers[recv_arb_id].calc_cause_correlation(send_arb_id) > CORRELATE_THRESHOLD \
+               and trackers[recv_arb_id].get_count() > TRIGGER_THRESHOLD:
+                 print("\rmessage received from: {0} could be due to sending to {1}.\n\tDiscovered correlation of {2} over {3} responses.".
+                    format(hex(recv_arb_id), hex(send_arb_id), 
+                           trackers[recv_arb_id].calc_cause_correlation(send_arb_id), 
+                           trackers[recv_arb_id].get_count()))
+                 #if (trackers[recv_arb_id].count >= 3):
+                     #cool_off_hot_test(send_arb_id, recv_arb_id, trackers[recv_arb_id].potential_cause_ids[send_arb_id], old_wrap, old_handler)
 
 
-def cool_off_hot_test(send_arb_id, recv_arb_id, messages, can_wrap):
-    sleep(DELAY_BETWEEN_MESSAGES) # To test sleep for log time and see if messages are still set
-    def response_handler(msg):
+# TODO: This is an unfinished method, the idea is that we want to do hot-load testing of certain interesting ids
+# There are problems with threading and the handlers.
+def cool_off_hot_test(send_arb_id, recv_arb_id, messages, oldWrap, oldHandler):
+    sleep(DELAY_BETWEEN_MESSAGES) # To test sleep for long time and see if messages are still set
+    def inner_response_handler(msg):
         if msg.arbitration_id == recv_arb_id:
-            print("bidirectional confirmation")
+            print("bidirectional confirmation ", hex(send_arb_id), hex(recv_arb_id))
 
+    oldWrap.clear_listeners()
+
+    with CanActions() as inner_can_wrap:
+        inner_can_wrap.add_listener(inner_response_handler)
+        stdout.flush()
+        inner_can_wrap.send(data=[0], arb_id=send_arb_id)
+        print("sent one to ", hex(send_arb_id))
+        sleep(DELAY_BETWEEN_MESSAGES)
+        sleep(DELAY_BETWEEN_MESSAGES)
+        sleep(DELAY_BETWEEN_MESSAGES)
+        sleep(DELAY_BETWEEN_MESSAGES)
+        inner_can_wrap.clear_listeners()
+        oldWrap.add_listener(oldHandler)
 
 
 def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBITRATION_ID_MIN,
                 max_id=ARBITRATION_ID_MAX, min_data_length=MIN_DATA_LENGTH, max_data_length=MAX_DATA_LENGTH,
-                start_index=0, show_status=True, seed=None):
+                start_index=0, show_status=True, seed=None, tracker=False):
     """
     A simple random fuzzer algorithm, which sends random or static data to random or static arbitration IDs
-
     :param static_arb_id: int representing static arbitration ID
     :param static_data: list of bytes representing static data
     :param filename: file to write cansend directives to
@@ -331,24 +410,21 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
     # Define a callback function which will handle incoming messages
     def response_handler(msg):
         if msg.arbitration_id != arb_id or list(msg.data) != data:
-            handle_trackers(trackers, log, current_index, msg.arbitration_id, msg.data, can_wrap)
-            directive = directive_str(arb_id, data)
-            write_to_ids_log(testFile, msg)
-            #for i in range(0, len(trackers)):
-            #   if trackers[i][0] > 0 and trackers[i][0] < 20:
-		    #        print (hex(i), trackers[i][0])
-            #print("\rDirective: {0} (index {1})".format(directive, current_index))
-            #print("  Received message: {0}".format(msg))
+            if (tracker):
+                handle_trackers(trackers, log, current_index, msg.arbitration_id, msg.data, can_wrap, response_handler)
+            else:
+                directive = directive_str(arb_id, data)
+                print("\rDirective: {0} (index {1})".format(directive, current_index))
+                print("  Received message: {0}".format(msg))
 
     arb_id = None
     data = None
     file_logging_enabled = filename is not None
     output_file = None
 
-    trackers = initialize_trackers()
+    trackers = {}
     log = []
     try:
-        testFile = open("test-file", "w+")
         if file_logging_enabled:
             output_file = open(filename, "a")
         with CanActions() as can_wrap:
@@ -380,18 +456,18 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
                     continue
 
                 if show_status:
-                    #print("\rMessages sent: {0}, index: {1}".format(messages_sent, current_index), end="")
+                    print("\rMessages sent: {0}, index: {1}".format(messages_sent, current_index), end="")
                     stdout.flush()
 
                 # Send message
                 can_wrap.send(data=data, arb_id=arb_id)
                 messages_sent += 1
 
-		        # Add to memory log
-                while len(log) >= LOG_SIZE:
-                    log.pop(0)
+                # Add to memory log
                 log.append([arb_id, data])
-		        
+                while len(log) > LOG_SIZE:
+                    log.pop(0)
+                
                 # Log to file
                 if file_logging_enabled:
                     write_directive_to_file_handle(output_file, arb_id, data)
@@ -400,7 +476,6 @@ def random_fuzz(static_arb_id=None, static_data=None, filename=None, min_id=ARBI
     except IOError as e:
         print("ERROR: {0}".format(e))
     finally:
-        testFile.close()
         if output_file is not None:
             output_file.close()
 
@@ -410,11 +485,9 @@ def bruteforce_fuzz(arb_id, initial_data, data_bitmap, filename=None, start_inde
     """
     Performs a brute force of selected data nibbles for a given arbitration ID.
     Nibble selection is controlled by bool list 'data_bitmap'.
-
     Example:
     bruteforce_fuzz(0x123, [0x1, 0x2, 0xA, 0xB], [True, False, False, True])
     will cause the following messages to be sent:
-
     0x123#02A0
     0x123#02A1
     0x123#02A2
@@ -424,7 +497,6 @@ def bruteforce_fuzz(arb_id, initial_data, data_bitmap, filename=None, start_inde
     0x123#12A1
     (...)
     0x123#F2AF
-
     :param arb_id: int arbitration ID
     :param initial_data: list of nibbles (ints in interval 0x0-0xF, inclusive)
     :param data_bitmap: list of bool values, representing which nibbles of 'initial_data' to bruteforce
@@ -502,7 +574,6 @@ def mutate_fuzz(initial_arb_id, initial_data, arb_id_bitmap, data_bitmap, filena
     """
     Performs mutation based fuzzing of selected nibbles of a given arbitration ID and data.
     Nibble selection is controlled by bool lists 'arb_id_bitmap' and 'data_bitmap'.
-
     :param initial_arb_id: list of nibbles (ints in interval 0x0-0xF, inclusive)
     :param initial_data: list of nibbles (ints in interval 0x0-0xF, inclusive)
     :param arb_id_bitmap: list of bool values, representing which nibbles of 'initial_arb_id' to bruteforce
@@ -585,7 +656,6 @@ def mutate_fuzz(initial_arb_id, initial_data, arb_id_bitmap, data_bitmap, filena
 def replay_fuzz(directives, show_requests, show_responses):
     """
     Replay cansend directives from 'filename'
-
     :param directives: list of (int arb_id, list data) tuples
     :param show_requests: bool indicating whether requests should be printed to stdout
     :param show_responses: bool indicating whether responses should be printed to stdout
@@ -620,7 +690,6 @@ def replay_fuzz(directives, show_requests, show_responses):
 def identify_fuzz(all_composites, show_responses):
     """
     Replays a list of composites causing an effect, prompting for input to help isolate the message causing the effect
-
     :param all_composites: list of composites
     :param show_responses: bool indicating whether responses should be printed to stdout
     :return: str directive if message is found,
@@ -707,19 +776,17 @@ def __handle_random(args):
         padded_nibbles = pad_to_even_length(data_nibbles)
         data = nibbles_to_bytes(padded_nibbles)
     random_fuzz(static_arb_id=args.id, static_data=data, filename=args.file,
-                min_data_length=args.min, max_data_length=args.max, start_index=args.index, seed=args.seed)
+                min_data_length=args.min, max_data_length=args.max, start_index=args.index, seed=args.seed, tracker=args.tracker)
 
 
 def parse_hex_and_dot_indices(values, dot_index_marker="."):
     """
     Parses a str consisting of hex nibble values and 'dot_index_marker' and returns a tuple consisting of
     a list of (int or None) values and a boolean list of dot indices.
-
     Example:
     parse_hex_and_dot_indices("1.34AB..")
     gives
     ([1, None, 3, 4, 0xA, 0xB, None, None], [False, True, False, False, False, False, True, True])
-
     :param values: str input consisting of hex and 'dot_index_marker' values
     :param dot_index_marker: str character which identifies dot indices
     :return: tuple with list of int/None values and list of int dot indices
@@ -785,7 +852,6 @@ def __handle_identify(args):
 def parse_args(args):
     """
     Argument parser for the fuzzer module.
-
     :param args: List of arguments
     :return: Argument namespace
     :rtype: argparse.Namespace
@@ -795,7 +861,6 @@ def parse_args(args):
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
                                      description="Fuzzing module for CaringCaribou",
                                      epilog="""Example usage:
-
 ./cc.py fuzzer random
 ./cc.py fuzzer random -min 4 -seed 0xabc123 -f log.txt
 ./cc.py fuzzer brute 0x123 12ab..78
@@ -817,6 +882,7 @@ def parse_args(args):
     cmd_random.add_argument("-seed", "-s", metavar="S", type=parse_int_dec_or_hex, default=None, help="set random seed")
     cmd_random.add_argument("-delay", type=float, metavar="D", default=DELAY_BETWEEN_MESSAGES,
                             help="delay between messages")
+    cmd_random.add_argument("-tracker", "-t", default=False, type=bool, help="track responses")
     cmd_random.set_defaults(func=__handle_random)
 
     # Brute force fuzzer
@@ -870,7 +936,6 @@ def parse_args(args):
 def module_main(arg_list):
     """
     Fuzz module main wrapper.
-
     :param arg_list: Module argument list passed by cc.py
     """
     try:
